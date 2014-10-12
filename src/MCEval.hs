@@ -18,7 +18,10 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiWayIf            #-}
+{-# LANGUAGE OverlappingInstances  #-}
 {-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE PatternGuards         #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
@@ -28,106 +31,32 @@
 {-# LANGUAGE ViewPatterns          #-}
 {-# LANGUAGE UndecidableInstances  #-}
 
+{-# OPTIONS_GHC -fcontext-stack=100 #-}
+
 module MCEval where
 
-import Control.Applicative
 import Control.Arrow
-import Control.Monad.Error
+import Control.Applicative
+import Control.Monad.Except
 import Control.Monad.Identity
-import Data.Foldable (Foldable)
 -- import Data.IntMap (IntMap)
-import Data.Map (Map)
-import Data.Maybe (fromMaybe)
 import Data.Monoid
 import Data.Text.Lazy (Text)
-import Data.Traversable (Traversable)
 -- import Text.ParserCombinators.Parsec
-import Text.ParserCombinators.UU hiding (Apply, Hole)
-import Text.ParserCombinators.UU.BasicInstances hiding (Error)
-import Text.ParserCombinators.UU.Utils
 import Text.PrettyPrint.Leijen.Text (Pretty, Doc)
 
-
--- import qualified Data.Foldable as Foldable
--- import qualified Data.IntMap as IM
--- import qualified Data.Map as M
-import qualified Data.Text.Lazy as T
--- import qualified Data.Traversable as Trav
 import qualified Text.PrettyPrint.Leijen.Text as PP
 
 import ALaCarte
-import ALaCarte.TH
+import Parse
+import Types
 
 import Prelude hiding (mapM)
 
 
--- newtype Fix f = Fix { unFix :: f (Fix f) }
---
--- deriving instance (Show (f (Fix f))) => Show (Fix f)
--- deriving instance (Eq (f (Fix f))) => Eq (Fix f)
--- deriving instance (Ord (f (Fix f))) => Ord (Fix f)
---
--- type Alg f a = f a -> a
---
--- cata :: (Functor f) => Alg f a -> Fix f -> a
--- cata alg = alg . fmap (cata alg) . unFix
---
--- para :: (Functor f) => (f (a, Fix f) -> a) -> Fix f -> a
--- para alg = alg . fmap (para alg &&& id) . unFix
---
--- -- para' :: forall f a. (Functor f) => (f (a, Fix f) -> a) -> Fix f -> a
--- -- -- para' alg = fst . cata (alg &&& Fix . fmap snd)
--- -- para' alg = fst . cata f
--- --   where
--- --     f :: f (a, Fix f) -> (a, Fix f)
--- --     f x = (alg x, Fix $ fmap snd x)
---
--- paraM :: forall m f a. (Monad m, Traversable f) => (f (a, Fix f) -> m a) -> Fix f -> m a
--- paraM alg = alg <=< Trav.mapM g . unFix
---   where
---     g :: Fix f -> m (a, Fix f)
---     g x = paraM alg x >>= return . (, x)
+type ErrT a = ExceptT Text Identity a
 
---- Basic types
-
-newtype AInt    = AInt { getAInt :: Integer }
-                deriving (Show, Eq, Ord)
-newtype ADouble = ADouble { getADouble :: Double }
-                deriving (Show, Eq, Ord)
-newtype AString = AString { getAString :: Text }
-                deriving (Show, Eq, Ord)
-newtype ABool   = ABool { getABool :: Bool }
-                deriving (Show, Eq, Ord)
-data Nil        = Nil
-                deriving (Show, Eq, Ord)
-
-type AtomF = K AInt :+: K ADouble :+: K AString :+: K ABool :+: K Nil
-
--- data Atom = AInt Integer
---           | ADouble Double
---           | AString Text
---           | ABool Bool
---           | Nil
---           deriving (Show, Eq, Ord)
-
-newtype Symbol = Symbol { getSymbol :: Text }
-               deriving (Show, Eq, Ord)
-
-data List f = List f [f] f
-            deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Vector f = Vector [f]
-              deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-type SchemeSexpF = Vector :+: List :+: K Symbol :+: AtomF
-
-type SchemeSexp = Term SchemeSexpF
-
-nil :: (K Nil :<: f) => Term f
-nil = inject $ K Nil
-
-
---- Parser/prettyprinter for scheme sexps
+--- prettyprinter for scheme sexps
 
 showSexp :: (Pretty a) => a -> Text
 showSexp = PP.displayT . PP.renderPretty 1.0 80 . PP.pretty
@@ -163,184 +92,10 @@ instance PrettyAlg Vector g where
 instance Pretty SchemeSexp where
   pretty = para prettyAlg
 
-many1 :: (Alternative f) => f a -> f [a]
-many1 p = ((:) <$> p <*> many p)
 
-mandatorySpace :: Parser String
-mandatorySpace = pMunch (`elem` " \r\n\t") <?> "Mandatory whitespace"
-
-parens :: ParserTrafo a a
-parens p = pSym '(' *> p <* pSym ')'
-
-parseNumber :: forall f. (K AInt :<: f, K ADouble :<: f) => Parser (Term f)
-parseNumber =
-  f <$> (consMb <$> sign <*> num)
-    <*> pMaybe ((:) <$> dot <*> num)
-    <*> pMaybe ((:) <$> e <*> (consMb <$> sign <*> num))
-  where
-    f :: String -> Maybe String -> Maybe String -> Term f
-    f x Nothing Nothing = inject . K . AInt . read $ x
-    f x y       z       = inject . K . ADouble . read $ x ++ y' ++ z'
-      where
-        y' = fromMaybe "" y
-        z' = fromMaybe "" z
-    sign = pMaybe (pSym '-' <|> pSym '+')
-    -- num  = many1 pDigit
-    dot  = pSym '.'
-    e    = pSym 'e' <|> pSym 'E'
-
-    num = (:) <$> pSatisfy isDigit ins <*> pMunch isDigit
-    isDigit c = '0' <= c && c <= '9'
-    ins = Insertion "Inserting character" 'Z' 10
-
-    consMb :: Maybe a -> [a] -> [a]
-    consMb (Just x) xs = x : xs
-    consMb Nothing  xs = xs
-
--- TODO allow for \" inside strings, recognize \\, \n etc
--- todo replace pQuotedString by other version that is not surrounded with
--- lexeme
-parseAString :: (K AString :<: f) => Parser (Term f)
-parseAString = inject . K . AString . T.pack <$> pQuotedString
-parseABool :: (K ABool :<: f) => Parser (Term f)
-parseABool = inject . K . ABool <$> (pSym '#' *> (pure True <* pSym 't' <|>
-                                                  pure False <* pSym 'f'))
-parseSymbol :: (K Nil :<: f, K Symbol :<: f) => Parser (Term f)
-parseSymbol = f . T.pack <$> ((:) <$> nondigitC <*> anyC)
-  where
-    f "nil" = nil
-    f x     = inject $ K $ Symbol x
-    anyC = pMunch anySymbolChar
-    anySymbolChar c =  nonDigitSymbolChar c ||
-                      '0' <= c && c <= '9'
-
-    nondigitC = pSatisfy nonDigitSymbolChar ins
-    nonDigitSymbolChar c = 'a' <= c && c <= 'z' ||
-                           'A' <= c && c <= 'Z' ||
-                           c == '-' ||
-                           c == '+' ||
-                           c == '*' ||
-                           c == '/' ||
-                           c == '!' ||
-                           c == '?' ||
-                           c == '<' ||
-                           c == '>' ||
-                           c == '=' ||
-                           c == '_'
-    ins = Insertion "Inserting character" 'Z' 10
-parseList :: (List :<: f, K Nil :<: f) => Parser (Term f) -> Parser (Term f)
-parseList p = parens $
-              -- (\h (body, t) -> inject $ List h body t) <$> p <*>
-              --                                              (([],)  <$> (pDot *> p) <|>
-              --                                               (,nil) <$> many p)
-              maybe nil (\(h, body, t) -> inject $ List h body t) <$>
-              pMaybe ((,,)    <$>
-                      p'      <*>
-                      many p' <*>
-                      (pDot *> p <|>
-                       pure nil))
-  where
-    p' = p <* mandatorySpace
--- TODO fix whitespace handling for vectors of one element, #(a) - space not
--- mandatory
-parseVector :: (Vector :<: f) => Parser (Term f) -> Parser (Term f)
-parseVector p = pSym '#' *> parens (inject . Vector <$> many (p <* mandatorySpace))
-
-
-parseTerm :: (Vector :<: f, List :<: f, K Symbol :<: f,
-              K AInt :<: f, K ADouble :<: f, K AString :<: f,
-              K ABool :<: f, K Nil :<: f) =>
-             Parser (Term f)
-parseTerm = parseNumber <|>
-            parseAString <|>
-            parseABool <|>
-            -- parseNil <|>
-            parseSymbol <|>
-            parseList parseTerm <|>
-            parseVector parseTerm
-
---- Closer to evaluation
-
-newtype Address = Address { getAddress :: Int }
-                deriving (Show, Eq, Ord)
-
-newtype Frame = Frame (Map Symbol Address)
-              deriving (Show, Eq, Ord)
-
-newtype Env = Env [Frame]
-            deriving (Show, Eq, Ord)
-
--- data Lambda f = Lambda Env [Symbol] f
-data Lambda f = Lambda [Symbol] f
-              deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-
-data Primitive f = PrimitiveAdd f f
-                 | PrimitiveSub f f
-                 | PrimitiveMul f f
-                 | PrimitiveDiv f f
-                 | PrimitiveEq f f
-                 -- Primitive Text ([SchemeData] -> f)
-                 deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
--- instance Show (Primitive f) where
---   show (Primitive tag _) = "Primitive " ++ tag
-
--- instance Eq (Primitive f) where
---   Primitive tag _ == Primitive tag' _ = tag == tag'
---
--- instance Ord (Primitive f) where
---   compare (Primitive tag _) (Primitive tag' _) = compare tag tag'
-
--- data Variable = Variable Symbol
---               deriving (Show, Eq, Ord)
-
-data Quote f = Quote f
-            deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Assign f = Assign f f
-              deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Define f = Define f f
-              deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data If f = If f f f
-          deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Begin f = Begin [f]
-             deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Apply f = Apply f [f]
-             deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Let f = Let [(f, f)] f
-           deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-
-data Cond f = Cond [(f, f)]
-            deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data And f = And f f
-           deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Or f = Or f f
-          deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-data Not f = Not f
-           deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
-
-
-type SchemeExprF = Not :+: Or :+: And :+: Cond :+: Let :+: Apply :+: Begin :+:
-                   If :+: Define :+: Assign :+: Quote :+:
-                   {-K Variable :+: Primitive :+:-} Lambda :+: SchemeSexpF
-type SchemeExpr = Term SchemeExprF
-
-
-type ErrT a = ErrorT Text Identity a
-
-instance Error Text where
-  noMsg  = T.empty
-  strMsg = T.pack
+-- instance Error Text where
+--   noMsg  = T.empty
+--   strMsg = T.pack
 
 -- class Depth f g where
 --   depthAlg :: f (Term (g :&: Int)) -> Int
@@ -371,137 +126,159 @@ instance Error Text where
 -- histomorphism recursion and term homomorphisms in result.
 -- Also conversion may fail, hence ErrT monad.
 -- (f :<: g, f :<: h) =>
-class GetProgram f g h where
+class GetProgram f h where
   -- getProgramAlg :: f (Term h, Term g) -> ErrT (Context h (Term h))
-  getProgramAlg :: f (Term (g :&: Term h)) -> ErrT (Context h (Term h))
+  getProgramAlg :: f (Term (SchemeSexpF :&: Term h)) -> ErrT (Context h (Term h))
 
-instance (GetProgram f g' h', GetProgram g g' h') => GetProgram (f :+: g) g' h' where
+instance (GetProgram f h', GetProgram g h') => GetProgram (f :+: g) h' where
   getProgramAlg (Inl x) = getProgramAlg x
   getProgramAlg (Inr y) = getProgramAlg y
 
-instance GetProgram (K AInt) SchemeSexpF SchemeExprF where
+instance (K AInt :<: g, Functor g) => GetProgram (K AInt) g where
   getProgramAlg = return . symToSym . inject . K . unK
   -- getProgramAlg (K x@(AInt _))    = return . symToSym . inject $ K x
-instance GetProgram (K ADouble) SchemeSexpF SchemeExprF where
+instance (K ADouble :<: g, Functor g) => GetProgram (K ADouble) g where
   getProgramAlg = return . symToSym . inject . K . unK
-instance GetProgram (K AString) SchemeSexpF SchemeExprF where
+instance (K AString :<: g, Functor g) => GetProgram (K AString) g where
   getProgramAlg = return . symToSym . inject . K . unK
-instance GetProgram (K ABool) SchemeSexpF SchemeExprF where
+instance (K ABool :<: g, Functor g) => GetProgram (K ABool) g where
   getProgramAlg = return . symToSym . inject . K . unK
-instance GetProgram (K Nil) SchemeSexpF SchemeExprF where
+instance (K Nil :<: SchemeExprF) => GetProgram (K Nil) SchemeExprF where
   getProgramAlg = return . symToSym . inject . K . unK
-instance GetProgram (K Symbol) SchemeSexpF SchemeExprF where
+instance GetProgram (K Symbol) SchemeExprF where
   getProgramAlg = return . symToSym . inject . K . unK
 
-isNil :: (K Nil :<: f) => Term (f :&: p) -> Bool
-isNil (Term (t :&: _)) = case proj t of
-                         Just (K Nil) -> True
-                         Nothing      -> False
-
-instance GetProgram List SchemeSexpF SchemeExprF where
+instance GetProgram List SchemeExprF where
   getProgramAlg (List (Term (hSexp :&: hExpr))
                       xs
-                      (isNil -> True)) =
+                      (isNilTerm -> True)) =
     case proj hSexp of
-      Just (K (Symbol "lambda"))   ->
-        case xs of
-          Term (argList :&: _): body -> do
-            case proj argList of
-              Just (List h' xs' (isNil -> True)) -> do
-                args <- mapM (toSymbol . stripAllTermAnn) $ h': xs'
-                return . inject $ Lambda args $ mkBegin body
-              _                                  ->
-                case proj argList of
-                  Just (K Nil) ->
-                    return . inject $ Lambda [] $ mkBegin body
-                  _            ->
-                    throwError $ "invalid argument list of lambda form" <> prettySexp
-          _                ->
-            throwError $ "invalid lambda form" <> prettySexp
+      Just (K (Symbol "lambda"))
+        | Term (argList :&: _): body <- xs ->
+          if | Just (List h' xs' (isNilTerm -> True)) <- proj argList -> do
+               args <- parseArgs $ h': xs'
+               return $ Term $ iLambda args $ mkBegin body
+             | isNil argList ->
+               return $ Term $ iLambda [] $ mkBegin body
+             | otherwise     ->
+               err "invalid argument list of lambda form"
+        | otherwise ->
+          err "invalid lambda form"
       Just (K (Symbol "quote"))  ->
-        singleArg Quote "invalid quote form"
+        case map (remA . unTerm) xs of
+          [x] -> return $ symToSym $ Term $ iQuote $ Term $ stripA <$> x
+          _   -> err "invalid quote form"
       Just (K (Symbol "set!"))   ->
-        twoArgs Assign "invalid set! form"
-      Just (K (Symbol "define")) ->
-        twoArgs Define "invalid define form"
+        twoArgs iAssign "invalid set! form"
+      Just (K (Symbol "define"))
+        | Term (argList :&: _): body <- xs ->
+          if | Just (K var@(Symbol _)) <- proj argList ->
+               return $ Term $ iDefine var $ mkBegin body
+             | Just (List (Term (h :&: _)) args (isNilTerm -> True)) <- proj argList,
+               Just (K funcName@(Symbol _)) <- proj h -> do
+               args' <- parseArgs args
+               return $
+                 Term $ iDefine funcName $
+                 Term $ iLambda args' $ mkBegin body
+             | otherwise ->
+               err "invalid define form"
+        | otherwise ->
+          err "invalid define form"
+        -- twoArgs iDefine "invalid define form"
       Just (K (Symbol "if"))     ->
-        threeArgs If "invalid if form"
+        threeArgs iIf "invalid if form"
       Just (K (Symbol "begin"))  ->
         return $ mkBegin xs
-      Just (K (Symbol "let"))    ->
-        case xs of
-          (Term (bindings :&: _)): body ->
-            case proj bindings of
-              Just (List h' xs' (isNil -> True)) -> do
-                bindings' <- mapM destructBinding $ h':xs'
-                let bindings'' = map (Hole *** Hole) bindings'
-                return . inject $ Let bindings'' $ mkBegin body
-              _                                  ->
-                case proj bindings of
-                  Just (K Nil) -> do
-                    return . inject $ Let [] $ mkBegin body
-                  _            ->
-                     throwError $ "invalid let form" <> prettySexp
-          _                             ->
-            throwError $ "invalid let form" <> prettySexp
+      Just (K (Symbol "let"))
+        | Term (bindings :&: _): body <- xs ->
+          if | Just (List h' xs' (isNilTerm -> True)) <- proj bindings -> do
+               bindings' <- mapM destructLetBinding $ h':xs'
+               let bindings'' = map (Hole *** Hole) bindings'
+               return $ Term $ iLet bindings'' $ mkBegin body
+             | isNil bindings ->
+               return $ Term $ iLet [] $ mkBegin body
+             | otherwise ->
+               err "invalid let form"
+        | otherwise ->
+          err "invalid let form"
       Just (K (Symbol "cond"))  -> do
-        undefined
-        -- clauses <- mapM (stripAnn . unTerm) xs
+        clauses <- mapM destructCondClause xs
+        return $ Term $ iCond clauses
         -- return . symToSym . inject $ Cond $ map (ann . unTerm) clauses
       Just (K (Symbol "and"))   ->
-        twoArgs And "invalid and form"
+        twoArgs iAnd "invalid and form"
       Just (K (Symbol "or"))    ->
-        twoArgs Or "invalid or form"
+        twoArgs iOr "invalid or form"
       Just (K (Symbol "not"))   ->
-        singleArg Not "invalid not form"
+        singleArg iNot "invalid not form"
       _                         ->
-        return . symToSym . inject $ Apply hExpr $ map (ann . unTerm) xs
+        return $ symToSym $ Term $ iApply hExpr $ map (ann . unTerm) xs
        -- Just (K (Symbol v)) -> inject $ Apply hExpr $ map (ann . unTerm) xs
      where
-       prettySexp = ": " <> showSexp (inject $ List (stripAllAnn hSexp)
-                                                    (map (stripAllAnn . stripAnn . unTerm) xs)
-                                                    (inject $ K Nil))
+       err msg = throwError $ msg <> ": " <> prettySexp
+       prettySexp = showSexp (Term $ iList (Term $ stripA <$> hSexp)
+                                           (map (Term . fmap stripA . remA . unTerm) xs)
+                                           (Term iNil))
+       mkBegin :: [Term (a :&: SchemeExpr)] -> Context SchemeExprF SchemeExpr
+       mkBegin = symToSym . Term . iBegin . map (ann . unTerm)
+       parseArgs :: [Term (SchemeSexpF :&: a)] -> ErrT [Symbol]
+       parseArgs = mapM (toSymbol "invalid function argument" . stripA)
+       -- singleArg :: a -> Text -> ErrT (Context SchemeExprF SchemeExpr)
+       singleArg cons msg =
+         case map (ann . unTerm) xs of
+           [x] -> return $ symToSym $ Term $ cons x
+           _   -> err msg
+       twoArgs cons msg =
+         case map (ann . unTerm) xs of
+           [x, y] -> return $ symToSym $ Term $ cons x y
+           _      -> err msg
+       threeArgs cons msg =
+         case map (ann . unTerm) xs of
+           [x, y, z] -> return $ symToSym $ Term $ cons x y z
+           _         -> err msg
 
-       mkBegin body = symToSym . inject $ Begin $ map (ann . unTerm) body
-       destructBinding :: (Term (SchemeSexpF :&: SchemeExpr)) -> ErrT (SchemeExpr, SchemeExpr)
-       destructBinding binding@(Term (x :&: _)) =
+       destructLetBinding :: (Term (SchemeSexpF :&: SchemeExpr)) -> ErrT (SchemeExpr, SchemeExpr)
+       destructLetBinding binding@(Term (x :&: _)) =
          case proj x of
            Just (List (Term (origNameExpr :&: nameExpr))
                       [Term (_ :&: valExpr)]
-                      (isNil -> True)) -> do
+                      (isNilTerm -> True)) -> do
              case proj origNameExpr of
                Just (K (Symbol _)) -> return (nameExpr, valExpr)
                _                   ->
                  throwError $ "invalid bound variable name in let form" <> prettyBinding
            _                           ->
-             throwError $ "invalid binding in let form" <> prettyBinding
+             throwError $ "invalid let form binding" <> prettyBinding
          where
-           prettyBinding = ": " <> showSexp (stripAllTermAnn binding)
-       singleArg cons msg =
-         case map (ann . unTerm) xs of
-           [x] -> return . symToSym . inject $ cons x
-           _   -> throwError $ msg <> prettySexp
-       twoArgs cons msg =
-         case map (ann . unTerm) xs of
-           [x, y] -> return . symToSym . inject $ cons x y
-           _      -> throwError $ msg <> prettySexp
-       threeArgs cons msg =
-         case map (ann . unTerm) xs of
-           [x, y, z] -> return . symToSym . inject $ cons x y z
-           _         -> throwError $ msg <> prettySexp
+           prettyBinding = ": " <> showSexp (stripA binding)
+       destructCondClause :: Term (SchemeSexpF :&: SchemeExpr) ->
+                             ErrT (Context SchemeExprF SchemeExpr, Context SchemeExprF SchemeExpr)
+       destructCondClause binding@(Term (x :&: _)) =
+         case proj x of
+           Just (List (Term (_ :&: condition))
+                      body
+                      (isNilTerm -> True)) ->
+             return (symToSym condition, mkBegin body)
+           _                           ->
+             throwError $ "invalid cond form clause" <> prettyBinding
+         where
+           prettyBinding = ": " <> showSexp (stripA binding)
 
-       toSymbol :: Term SchemeSexpF -> ErrT Symbol
-       toSymbol t =
+       toSymbol :: Text -> Term SchemeSexpF -> ErrT Symbol
+       toSymbol errMsg t =
          case project t of
            Just (K sym@(Symbol _)) -> return sym
-           _                       -> throwError $ "symbol expected: " <> showSexp t
+           _                       -> throwError $ errMsg <>
+                                      ", symbol expected: " <> showSexp t
+  getProgramAlg x = throwError $ "cannot exctract program from " <>
+                    showSexp (inject $ fmap stripA x :: SchemeSexp)
 
-instance GetProgram Vector SchemeSexpF SchemeExprF where
+instance GetProgram Vector SchemeExprF where
   getProgramAlg (Vector vs) =
-    return . symToSym . inject $ Vector $ map (ann . unTerm) vs
+    return . symToSym . Term . iVector $ map (ann . unTerm) vs
 
 getProgram :: SchemeSexp -> Either Text SchemeExpr
-getProgram = runIdentity . runErrorT . histoFutuM getProgramAlg
+getProgram = runIdentity . runExceptT . histoFutuM getProgramAlg
 
 -- data SchemeExprF f = SelfEvaluating (AtomF f)
 --                    | Variable Symbol
@@ -577,26 +354,3 @@ getProgram = runIdentity . runErrorT . histoFutuM getProgramAlg
 -- --
 -- --     -- pairsToList :: SchemeExpr
 -- --
-
-$(deriveInjectingConstructor ''AInt)
-$(deriveInjectingConstructor ''ADouble)
-$(deriveInjectingConstructor ''AString)
-$(deriveInjectingConstructor ''ABool)
-$(deriveInjectingConstructor ''Nil)
-$(deriveInjectingConstructor ''Symbol)
-$(deriveInjectingConstructor ''List)
-$(deriveInjectingConstructor ''Vector)
-$(deriveInjectingConstructor ''Lambda)
-
-$(deriveInjectingConstructor ''Quote)
-$(deriveInjectingConstructor ''Assign)
-$(deriveInjectingConstructor ''Define)
-$(deriveInjectingConstructor ''If)
-$(deriveInjectingConstructor ''Begin)
-$(deriveInjectingConstructor ''Apply)
-$(deriveInjectingConstructor ''Let)
-$(deriveInjectingConstructor ''Cond)
-$(deriveInjectingConstructor ''And)
-$(deriveInjectingConstructor ''Or)
-$(deriveInjectingConstructor ''Not)
-

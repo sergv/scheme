@@ -12,11 +12,19 @@ build-type:          Simple
 
 library
   build-depends:     base, containers, mtl, text, wl-pprint-text, uu-parsinglib,
-                     void, template-haskell
+                     void, template-haskell, array, semigroups
   exposed-modules:   MCEval
-  other-modules:     ALaCarte
+                     ALaCarte,
+                     ALaCarte.TH,
+                     Parse,
+                     Types,
+                     SexpFrontend.Lexer,
+                     SexpFrontend.LexTok,
+                     SexpFrontend.Parser
+  -- other-modules:
   default-language:  Haskell2010
   ghc-options:       -W -Wall -fwarn-monomorphism-restriction -ferror-spans -rtsopts
+  build-tools:       alex, happy
   hs-source-dirs:    src
 
 -- executable           scheme-repl
@@ -32,12 +40,14 @@ library
 test-suite scheme-test
   type:             exitcode-stdio-1.0
   build-depends:    base, containers, mtl, text, wl-pprint-text, uu-parsinglib,
-                    void, tasty, tasty-hunit, template-haskell,
+                    void, template-haskell, array, semigroups,
+                    tasty, tasty-hunit, template-haskell,
                     --, hunit
                     -- test-framework,
                     -- QuickCheck, test-framework-quickcheck
                     scheme
  main-is:           Main.hs
- hs-source-dirs:    test, src
+ hs-source-dirs:    test
+  -- , src, dist/build
  default-language:  Haskell2010
 

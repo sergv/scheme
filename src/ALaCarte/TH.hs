@@ -11,6 +11,8 @@
 --
 ----------------------------------------------------------------------------
 
+{-# LANGUAGE TemplateHaskell #-}
+
 module ALaCarte.TH where
 
 import Control.Applicative

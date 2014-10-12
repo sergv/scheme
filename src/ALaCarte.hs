@@ -11,27 +11,27 @@
 --
 ----------------------------------------------------------------------------
 
-{-# LANGUAGE DeriveFoldable        #-}
-{-# LANGUAGE DeriveFunctor         #-}
-{-# LANGUAGE DeriveTraversable     #-}
-{-# LANGUAGE EmptyDataDecls        #-}
-{-# LANGUAGE FlexibleContexts      #-}
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE GADTs                 #-}
-{-# LANGUAGE KindSignatures        #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverlappingInstances  #-}
-{-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE StandaloneDeriving    #-}
-{-# LANGUAGE TupleSections         #-}
-{-# LANGUAGE TypeOperators         #-}
-{-# LANGUAGE UndecidableInstances  #-}
+{-# LANGUAGE DeriveFoldable         #-}
+{-# LANGUAGE DeriveFunctor          #-}
+{-# LANGUAGE DeriveTraversable      #-}
+{-# LANGUAGE EmptyDataDecls         #-}
+{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE KindSignatures         #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE OverlappingInstances   #-}
+{-# LANGUAGE RankNTypes             #-}
+{-# LANGUAGE ScopedTypeVariables    #-}
+{-# LANGUAGE StandaloneDeriving     #-}
+{-# LANGUAGE TupleSections          #-}
+{-# LANGUAGE TypeOperators          #-}
+{-# LANGUAGE UndecidableInstances   #-}
 
 module ALaCarte where
 
 import Control.Applicative
-import Control.Arrow
 import Control.Monad hiding (mapM, sequence)
 import Data.Foldable (Foldable)
 import Data.Traversable (Traversable, mapM)
@@ -53,20 +53,16 @@ infixr 6 :+:
 data (:&:) f p ix = f ix :&: p
                   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
 
+infixl 6 :&:
+
 ann :: (f :&: p) ix -> p
 ann (_ :&: p) = p
 
-stripAnn :: (f :&: p) ix -> f ix
-stripAnn (f :&: _) = f
+remA :: (f :&: p) ix -> f ix
+remA (f :&: _) = f
 
-stripTermAnn :: (Functor f) => Term (f :&: p) -> Term f
-stripTermAnn = stripAllAnn . stripAnn . unTerm
-
-stripAllAnn :: (Functor f) => f (Term (f :&: p)) -> Term f
-stripAllAnn = Term . fmap (cata (Term . stripAnn))
-
-stripAllTermAnn :: (Functor f) => Term (f :&: p) -> Term f
-stripAllTermAnn = stripAllAnn . stripAnn . unTerm
+stripA :: (Functor f) => Term (f :&: p) -> Term f
+stripA = cata (Term . remA)
 
 -- instance (Functor f, Functor g) => Functor (f :+: g) where
 --   fmap h (Inl f) = Inl $ fmap h f
@@ -114,6 +110,7 @@ deriving instance (Ord (f (Ctx h f a)), Ord a) => Ord (Ctx h f a)
 type Term f = Ctx NoHole f Void
 type Context f a = Ctx Hole f a
 
+-- Symbol to symbol term homomorphism transformation>
 symToSym :: (Functor f) => Term f -> Context f (Term f)
 symToSym (Term t) = Term $ fmap Hole t
 
@@ -135,10 +132,10 @@ unTermSafe :: Ctx h f a -> Maybe (f (Ctx h f a))
 unTermSafe (Term t) = Just t
 unTermSafe (Hole _) = Nothing
 
-cata :: (Functor f) => (Alg f a) -> Term f -> a
+cata :: (Functor f) => Alg f a -> Term f -> a
 cata alg (Term t) = alg $ fmap (cata alg) t
 
-cataM :: (Traversable t, Monad m) => (AlgM m t a) -> Term t -> m a
+cataM :: (Traversable t, Monad m) => AlgM m t a -> Term t -> m a
 cataM alg (Term t) = alg =<< mapM (cataM alg) t
 
 -- cata :: (Functor f) => (f a -> a) -> Term f -> a
@@ -178,7 +175,8 @@ histo :: forall f a. (Functor f) =>
 histo alg = ann . unTerm . f
   where
     f :: Term f -> Term (f :&: a)
-    f = cata (Term . uncurry (:&:) . (id &&& alg))
+    -- f = cata (Term . uncurry (:&:) . (id &&& alg))
+    f = cata (\x -> Term (x :&: alg x))
 
 histoFutu :: forall f h. (Functor f, Functor h) =>
              (f (Term (f :&: Term h)) -> Context h (Term h)) -> Term f -> Term h
