@@ -46,9 +46,9 @@ deriveInjectingConstructor datatypeName = do
   TyConI dataDef <- reify datatypeName
   let (t, tvars, constructors) =
         case dataDef of
-          DataD _ctx typeName tvs cs _csNames ->
+          DataD _cxt typeName tvs cs _csNames ->
             (typeName, tvs, cs)
-          NewtypeD _ctx typeName tvs c _ ->
+          NewtypeD _cxt typeName tvs c _ ->
             (typeName, tvs, [c])
           x -> error $ "Unsupported data declaration: " ++ show x
   -- case tvars of

@@ -27,6 +27,8 @@ import Control.Applicative
 import Data.List
 import Data.Maybe (fromMaybe)
 import Data.Text.Lazy (Text)
+import Data.Vector (Vector)
+import qualified Data.Vector as V
 import qualified Data.Text.Lazy as T
 import Text.ParserCombinators.UU hiding (Apply, Hole)
 import Text.ParserCombinators.UU.BasicInstances hiding (Error)
@@ -123,11 +125,11 @@ listParser p =
     maybe (Term iNil) (\(h, (body, t)) -> inject $ List h body t) <$>
       pMaybe ((,) <$> p <*> tl)
   where
-    tl :: Parser ([Term f], Term f)
+    tl :: Parser (Vector (Term f), Term f)
     tl = (mandatorySpace *>
-           (([], ) <$> (pSym '.' *> mandatorySpace *> p) <<|>
-            ((\x (xs, y) -> (x : xs, y)) <$> p <*> tl)))
-         <|> pure ([], Term iNil)
+           ((V.empty, ) <$> (pSym '.' *> mandatorySpace *> p) <<|>
+            ((\x (xs, y) -> (V.cons x xs, y)) <$> p <*> tl)))
+         <|> pure (V.empty, Term iNil)
 
 -- listParser :: forall f. (List :<: f, K Nil :<: f) => Parser (Term f) -> Parser (Term f)
 -- listParser p =
@@ -143,17 +145,17 @@ listParser p =
 
 -- TODO fix whitespace handling for vectors of one element, #(a) - space not
 -- mandatory
-vectorParser :: (Vector :<: f) => Parser (Term f) -> Parser (Term f)
-vectorParser p = pSym '#' *> parens (inject . Vector <$> pListSep mandatorySpace p)
+vectorParser :: (Vect :<: f) => Parser (Term f) -> Parser (Term f)
+vectorParser p = pSym '#' *> parens (inject . Vect . V.fromList <$> pListSep mandatorySpace p)
 
-termParser :: (Vector :<: f, List :<: f, K Symbol :<: f,
+termParser :: (Vect :<: f, List :<: f, K Symbol :<: f,
                K AInt :<: f, K ADouble :<: f, K AString :<: f,
                K ABool :<: f, K Nil :<: f) =>
               Parser (Term f)
 termParser = combine <$> pMaybe (pSym '\'' <* optionalSpace) <*> p
   where
     combine quote t =
-      maybe t (const $ Term $ iList (Term $ iSymbol "quote") [t] (Term iNil)) quote
+      maybe t (const $ Term $ iList (Term $ iSymbol "quote") (V.singleton t) (Term iNil)) quote
     p =     numberParser
         <|> stringParser
         <|> boolParser
@@ -161,9 +163,9 @@ termParser = combine <$> pMaybe (pSym '\'' <* optionalSpace) <*> p
         <|> listParser termParser
         <|> vectorParser termParser
 
-parseTerm :: (Vector :<: f, List :<: f, K Symbol :<: f,
-               K AInt :<: f, K ADouble :<: f, K AString :<: f,
-               K ABool :<: f, K Nil :<: f) =>
+parseTerm :: (Vect :<: f, List :<: f, K Symbol :<: f,
+              K AInt :<: f, K ADouble :<: f, K AString :<: f,
+              K ABool :<: f, K Nil :<: f) =>
              String -> Text -> Term f
 parseTerm fname src =
   case parse_h ((,) <$> termParser <*> pEnd) (Str src [] (LineColPos 0 0 0) False) of

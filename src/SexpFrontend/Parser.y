@@ -10,12 +10,14 @@ import Data.List.NonEmpty
 import Data.Maybe
 import Data.Monoid
 import Data.Text.Lazy (Text)
+import qualified Data.Vector as V
 import qualified Data.Text.Lazy as T
 
 import ALaCarte
 import Types
 import SexpFrontend.Lexer
 import qualified SexpFrontend.LexTok as LexTok
+import Utils
 
 }
 
@@ -46,18 +48,19 @@ import qualified SexpFrontend.LexTok as LexTok
 program         :: { RawProgram }
                 : sexpsNE { RawProgram $1 }
 
-sexpsNE         :: { NonEmpty (Term (SchemeSexpF :&: Position)) }
+sexpsNE         :: { NonEmpty (Term (SchemeSexpF :&: U Position)) }
                 : sexp sexps { $1 :| $2 }
 
-sexps           :: { [Term (SchemeSexpF :&: Position)] }
+sexps           :: { [Term (SchemeSexpF :&: U Position)] }
                 : sexp sexps { $1 : $2 }
                 | {- empty -} { [] }
 
-sexp            :: { Term (SchemeSexpF :&: Position) }
+sexp            :: { Term (SchemeSexpF :&: U Position) }
                 : pos QUOTE sexp { Term (iList (Term (iSymbol "quote" :&: $1))
-                                               [$3]
+                                               (V.singleton $3)
                                                (Term (iNil :&: $1))
-                                         :&: $1)}
+                                         :&: $1)
+                                 }
                 | pos STRING     { Term (iAString $2 :&: $1) }
                 | pos NUMBER     { Term (iAInt $2 :&: $1) }
                 | pos REAL       { Term (iADouble $2 :&: $1) }
@@ -67,16 +70,17 @@ sexp            :: { Term (SchemeSexpF :&: Position) }
                 | list           { $1 }
                 | vector         { $1 }
 
-list            :: { Term (SchemeSexpF :&: Position) }
+list            :: { Term (SchemeSexpF :&: U Position) }
                 : pos '(' ')'                  { Term (iNil :&: $1) }
                 | pos '(' sexpsNE pos ')'      { let (head :| body) = $3 in
-                                                 Term (iList head body (Term (iNil :&: $4)) :&: $1) }
+                                                 Term (iList head (V.fromList body) (Term (iNil :&: $4)) :&: $1) }
                 | pos '(' sexpsNE '.' sexp ')' { let (head :| body) = $3 in
-                                                 Term (iList head body $5 :&: $1) }
+                                                 Term (iList head (V.fromList body) $5 :&: $1) }
 
-vector          :: { Term (SchemeSexpF :&: Position) }
-                : pos '#(' sexps ')' { Term (iVector $3 :&: $1) }
+vector          :: { Term (SchemeSexpF :&: U Position) }
+                : pos '#(' sexps ')' { Term (iVect (V.fromList $3) :&: $1) }
 
+-- dummy rule to get current position
 pos             :: { Position }
                 : {- empty -} {% lift (liftM alexLexPos alexGetInput) >>= \(LexPos line col) ->
                                    ask >>= \filename ->
@@ -91,8 +95,8 @@ type Parser a = ReaderT Text Alex a
 parse :: Text -> String -> Either String RawProgram
 parse = runParser parseProgram
 
-parseTerm :: Text -> String -> Either String SchemeSexp
-parseTerm filename input = stripA <$> runParser parseSexp filename input
+parseTerm :: Text -> Text -> Either String (Term (SchemeSexpF :&: U Position))
+parseTerm filename input = runParser parseSexp filename (T.unpack input)
 
 runParser :: Parser a -> Text -> String -> Either String a
 runParser action filename input =
@@ -109,8 +113,5 @@ parseError tok = do
   throwError $ T.unpack $
     "Happy: " <> fname <> ":" <> show' line <> ":" <> show' col <> ": " <> show' tok
 parseError EOF = throwError "unexpected end of file"
-
-show' :: (Show a) => a -> Text
-show' = T.pack . show
 
 }

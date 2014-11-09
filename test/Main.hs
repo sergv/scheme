@@ -11,15 +11,18 @@
 --
 ----------------------------------------------------------------------------
 
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE OverloadedLists     #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeOperators       #-}
+
+{-# OPTIONS_GHC -fcontext-stack=100 #-}
 
 module Main where
 
+import Control.Applicative
 import Data.Maybe (isJust)
-
 import Data.Text.Lazy (Text)
 import qualified Data.Text.Lazy as T
 import Test.Tasty
@@ -41,10 +44,10 @@ projectsTo t _ = assertBool "projectsTo failed" $
                  isJust $ (project t :: Maybe (f (Term g)))
 
 tests :: TestTree
-tests = testGroup "Tests" [parserTests]
+tests = testGroup "Tests" [parserTests, extractorTests]
 
 testParseTerm :: Text -> SchemeSexp
-testParseTerm source = either error id $ parseTerm "test" $ T.unpack source
+testParseTerm source = either error id $ stripA <$> parseTerm "test" source
 
 parserTests :: TestTree
 parserTests = testGroup "Parser tests"
@@ -115,15 +118,62 @@ parserTests = testGroup "Parser tests"
          (Term $ iAInt 30))
   , testCase "Parse singleton vector" $
     testParseTerm "#(1)" @?=
-    Term (iVector [Term $ iAInt 1])
+    Term (iVect [Term $ iAInt 1])
   , testCase "Parse sample vector" $
     testParseTerm "#(1 2 #t)" @?=
     Term
-      (iVector
+      (iVect
          [ Term $ iAInt 1
          , Term $ iAInt 2
          , Term $ iABool True
          ])
+  ]
+
+testExtractTerm :: Text -> Either Text SchemeExpr
+testExtractTerm source =
+  getProgram $ either error id $ parseTerm "test" source
+
+isRight :: (Show a, Show b, Eq b) => Either a b -> b -> Assertion
+isRight (Right x)   y = x @?= y
+isRight v@(Left _)  _ = assertFailure $ "isRight failed: " ++ show v
+
+isLeft :: (Show a, Show b) => Either a b -> Assertion
+isLeft (Left _)    = return () -- success
+isLeft v@(Right _) = assertFailure $ "isLeft failed: " ++ show v
+
+extractorTests :: TestTree
+extractorTests = testGroup "Extractor tests"
+  [ testCase "Extract atom" $
+    testExtractTerm "foo" @?= Right (Term (iSymbol "foo"))
+  , testCase "Extract let" $
+    isRight
+      (testExtractTerm "(let ((x 1) (y 2)) (+ x y))")
+      (Term
+        (iLet
+          [ (Term (iSymbol "x"), Term (iAInt 1))
+          , (Term (iSymbol "y"), Term (iAInt 2))
+          ]
+          (Term
+            (iBegin
+              [ Term
+                 (iApply (Term (iSymbol "+"))
+                         [ Term (iSymbol "x")
+                         , Term (iSymbol "y")
+                         ])
+              ]))))
+  , testCase "Extract and" $
+    isRight
+      (testExtractTerm "(and foo bar)")
+      (Term
+        (iAnd
+          (Term (iSymbol "foo"))
+          (Term (iSymbol "bar"))))
+  , testCase "Extract and error" $
+    isLeft (testExtractTerm "(and foo bar baz)")
+  , testCase "Extract and error #2" $
+    isLeft (testExtractTerm "(and foo)")
+  , testCase "Extract and error #3" $
+    isLeft (testExtractTerm "(and)")
   ]
 
 main :: IO ()

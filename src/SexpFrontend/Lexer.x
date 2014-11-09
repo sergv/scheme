@@ -22,7 +22,7 @@ where
 import Control.Applicative
 import Control.Arrow
 import Control.Monad
-import Control.Monad.Except
+import Control.Monad.Error
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Monoid
@@ -31,6 +31,7 @@ import qualified Data.Text.Lazy as T
 import Text.Read (readMaybe)
 
 import SexpFrontend.LexTok
+import Utils
 
 }
 
@@ -141,10 +142,10 @@ alexEOF = do
   else return EOF
 
 retrieveRead :: (Read a) => AlexInput -> Int -> Text -> Alex a
-retrieveRead input len msg =
+retrieveRead input@((AlexPn _ line col), _, _, _) len msg =
   maybe (recordError errorMsg) return $ readMaybe $ T.unpack tok
   where
-    errorMsg = "cannot read from " <> tok <> ": " <> msg
+    errorMsg = show' line <> ":" <> show' col <> ":" <> "cannot read from " <> tok <> ": " <> msg
     tok      = retrieveToken input len
 
 retrieveToken :: AlexInput -> Int -> Text
