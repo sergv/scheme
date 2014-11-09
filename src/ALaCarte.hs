@@ -124,6 +124,14 @@ type family AddU a where
 -- annU (_    :&: a) = a
 -- annU (rest :^: a) = annU rest :*: a
 
+onCarrier :: (f ix -> g ix') -> (f :&: p) ix -> (g :&: p) ix'
+onCarrier h (f    :&: a) = h f :&: a
+onCarrier h (rest :^: a) = onCarrier h rest :^: a
+
+splitAnn :: (f :&: p) ix -> (f ix, p)
+splitAnn (f    :&: a) = (f, U a)
+splitAnn (rest :^: a) = second (:*: a) $ splitAnn rest
+
 ann' :: (f :&: p) ix -> p
 ann' (_    :&: a) = U a
 ann' (rest :^: a) = ann' rest :*: a
@@ -155,16 +163,15 @@ stripOuterA = cata (Term . remOuterA)
 
 
 class AddAnn p where
-  addAnn :: p -> f ix -> (f :&: AddU p) ix
+  addAnn :: p -> f ix -> (f :&: p) ix
 
 instance (AddAnn a) => AddAnn (a :*: b) where
-  -- addAnn :: forall a b. ClearU (a :*: b) -> f ix -> (f :&: )
   addAnn (a :*: b) f = addAnn a f :^: b
 
 instance AddAnn (U p) where
-  addAnn p f = f :&: p
+  addAnn (U p) f = f :&: p
 
-annotate :: (Functor f, AddAnn p) => p -> Cxt h f a -> Cxt h (f :&: AddU p) a
+annotate :: (Functor f, AddAnn p) => p -> Cxt h f a -> Cxt h (f :&: p) a
 annotate p (Term e) = Term $ addAnn p $ fmap (annotate p) e
 annotate _ (Hole x) = Hole x
 
@@ -264,6 +271,10 @@ type Context f a = Cxt Hole f a
 symToSym :: (Functor f) => Term f -> Context f (Term f)
 symToSym (Term t) = Term $ fmap Hole t
 
+-- Lax version of symToSym mainly for convenience.
+symToSym' :: (Functor f) => f a -> Context f a
+symToSym' = Term . fmap Hole
+
 inject :: (f :<: g) => f (Cxt h g a) -> Cxt h g a
 inject = Term . inj
 
@@ -321,8 +332,8 @@ para alg (Term t) = alg $ fmap g $ t
   where
     g x = (para alg x, x)
 
-paraAnn :: (Functor f) => (ClearU p -> f (a, Term f) -> a) -> Term (f :&: p) -> a
-paraAnn alg = para (\(f :&: p) -> alg p $ fmap (second stripA) f)
+paraAnn :: (Functor f) => (ClearU p -> f (a, Term (f :&: p)) -> a) -> Term (f :&: p) -> a
+paraAnn alg = para (\(f :&: p) -> alg p f)
 
 paraM :: (Traversable t, Functor m, Monad m) => (t (a, Term t) -> m a) -> Term t -> m a
 paraM alg (Term t) = alg =<< mapM g t
@@ -383,8 +394,10 @@ histoFutuM :: forall f h m. (Traversable f, Functor h, Functor m, Monad m)
            -> m (Term h)
 histoFutuM alg = histoM (fmap applyCxt . alg)
 
-histoMAnn :: forall f m p a. (Traversable f, Functor m, Monad m) =>
-             (p -> f (Term (f :&: U p :*: a)) -> m a) -> Term (f :&: U p) -> m a
+histoMAnn :: forall f m p a. (Traversable f, Functor m, Monad m)
+          => (p -> f (Term (f :&: U p :*: a)) -> m a)
+          -> Term (f :&: U p)
+          -> m a
 histoMAnn alg = fmap (annLast . unTerm) . cataM g
   where
     g :: AlgM m (f :&: U p) (Term (f :&: U p :*: a))
@@ -392,11 +405,13 @@ histoMAnn alg = fmap (annLast . unTerm) . cataM g
       a <- alg p f
       return $ Term $ fp :^: a
 
+-- Automatically carries annotations through so algebra does not has to worry
+-- about it.
 histoFutuMAnn :: forall f h m p. (Traversable f, Functor h, Functor m, Monad m)
-              => (p -> f (Term (f :&: U p :*: Term h)) -> m (Context h (Term h)))
+              => (p -> f (Term (f :&: U p :*: Term (h :&: U p))) -> m (Context h (Term (h :&: U p))))
               -> Term (f :&: U p)
-              -> m (Term h)
-histoFutuMAnn alg = histoMAnn (\p f -> fmap applyCxt $ alg p f)
+              -> m (Term (h :&: U p))
+histoFutuMAnn alg = histoMAnn (\p f -> applyCxt . annotate (U p) <$> alg p f)
 
 
 -- liftToAnn :: ((f a -> b) -> Term f -> m b) -> (f )
@@ -430,6 +445,17 @@ type Coalg f a = a -> f a
 termHom :: (Functor f, Functor g) => TermHom f g -> Cxt h f a -> Cxt h g a
 termHom f (Term t) = applyCxt $ f $ fmap (termHom f) t
 termHom _ (Hole x) = Hole x
+
+termHomAnn :: forall f g h p a. (Functor f, Functor g, AddAnn p)
+           => TermHom f g
+           -> Cxt h (f :&: p) a
+           -> Cxt h (g :&: p) a
+termHomAnn f (Term t) = applyCxt $ annotate p $ f $ fmap (termHomAnn f) t'
+  where
+    t' :: f (Cxt h (f :&: p) a)
+    p  :: p
+    (t', p) = splitAnn t
+termHomAnn _ (Hole x) = Hole x
 
 termHomM :: (Functor f, Traversable f, Functor g, Monad m) => TermHomM m f g -> Cxt h f a -> m (Cxt h g a)
 termHomM f (Term t) = liftM applyCxt $ f =<< mapM (termHomM f) t

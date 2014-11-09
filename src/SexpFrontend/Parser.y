@@ -95,8 +95,9 @@ type Parser a = ReaderT Text Alex a
 parse :: Text -> String -> Either String RawProgram
 parse = runParser parseProgram
 
-parseTerm :: Text -> Text -> Either String (Term (SchemeSexpF :&: U Position))
-parseTerm filename input = runParser parseSexp filename (T.unpack input)
+parseTerm :: Text -> Text -> Either Text (Term (SchemeSexpF :&: U Position))
+parseTerm filename input =
+  either (Left . T.pack) Right $ runParser parseSexp filename $ T.unpack input
 
 runParser :: Parser a -> Text -> String -> Either String a
 runParser action filename input =

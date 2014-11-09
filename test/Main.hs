@@ -44,10 +44,10 @@ projectsTo t _ = assertBool "projectsTo failed" $
                  isJust $ (project t :: Maybe (f (Term g)))
 
 tests :: TestTree
-tests = testGroup "Tests" [parserTests, extractorTests]
+tests = testGroup "Tests" [parserTests, extractorTests, evalTests]
 
 testParseTerm :: Text -> SchemeSexp
-testParseTerm source = either error id $ stripA <$> parseTerm "test" source
+testParseTerm source = either (error . T.unpack) id $ stripA <$> parseTerm "test" source
 
 parserTests :: TestTree
 parserTests = testGroup "Parser tests"
@@ -131,7 +131,7 @@ parserTests = testGroup "Parser tests"
 
 testExtractTerm :: Text -> Either Text SchemeExpr
 testExtractTerm source =
-  getProgram $ either error id $ parseTerm "test" source
+  stripA <$> (getProgram =<< parseTerm "test" source)
 
 isRight :: (Show a, Show b, Eq b) => Either a b -> b -> Assertion
 isRight (Right x)   y = x @?= y
@@ -150,8 +150,8 @@ extractorTests = testGroup "Extractor tests"
       (testExtractTerm "(let ((x 1) (y 2)) (+ x y))")
       (Term
         (iLet
-          [ (Term (iSymbol "x"), Term (iAInt 1))
-          , (Term (iSymbol "y"), Term (iAInt 2))
+          [ (Symbol "x", Term (iAInt 1))
+          , (Symbol "y", Term (iAInt 2))
           ]
           (Term
             (iBegin
@@ -174,6 +174,50 @@ extractorTests = testGroup "Extractor tests"
     isLeft (testExtractTerm "(and foo)")
   , testCase "Extract and error #3" $
     isLeft (testExtractTerm "(and)")
+  ]
+
+testEvalTerm :: Text -> Either Text (SchemeVal (SchemeCoreExprF :&: U Position))
+testEvalTerm source =
+  evalPipeline =<< parseTerm "test" source
+
+evalTests :: TestTree
+evalTests = testGroup "Eval tests"
+  [ testCase "self-evaluating integers" $
+    isRight
+      (testEvalTerm "1")
+      (Term (iAInt 1))
+  , testCase "self-evaluating nil" $
+    isRight
+      (testEvalTerm "nil")
+      (Term iNil)
+  , testCase "assignment" $
+    isRight
+      (testEvalTerm "(begin (set! x 1) x)")
+      (Term (iAInt 1))
+  , testCase "define" $
+    isRight
+      (testEvalTerm "(begin (define x 1) x)")
+      (Term (iAInt 1))
+  , testCase "define and assignment" $
+    isRight
+      (testEvalTerm "(begin (define x 1) (set! x 2) x)")
+      (Term (iAInt 2))
+  , testCase "lambda application" $
+    isRight
+      (testEvalTerm "((lambda (x y) x) 1 2)")
+      (Term (iAInt 1))
+  , testCase "sum" $
+    isRight
+      (testEvalTerm "(+ 1 2 3 4)")
+      (Term (iAInt 10))
+  , testCase "product" $
+    isRight
+      (testEvalTerm "(* 1 2 3 4)")
+      (Term (iAInt 24))
+  , testCase "difference" $
+    isRight
+      (testEvalTerm "(- 1 2 3 4)")
+      (Term (iAInt (-8)))
   ]
 
 main :: IO ()

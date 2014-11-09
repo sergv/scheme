@@ -83,13 +83,6 @@ data Nil        = Nil
 
 type AtomF = K Symbol :+: K AInt :+: K ADouble :+: K AString :+: K ABool :+: K Nil
 
--- data Atom = AInt Integer
---           | ADouble Double
---           | AString Text
---           | ABool Bool
---           | Nil
---           deriving (Show, Eq, Ord)
-
 newtype Symbol = Symbol { getSymbol :: Text }
                deriving (Show, Eq, Ord)
 
@@ -112,7 +105,7 @@ data Lambda f = Lambda (Vector Symbol) f
 newtype Quote = Quote SchemeSexp
               deriving (Show, Eq, Ord)
 
-data Assign f = Assign f f
+data Assign f = Assign Symbol f
               deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 data Define f = Define Symbol f
@@ -127,7 +120,7 @@ data Begin f = Begin (Vector f)
 data Apply f = Apply f (Vector f)
              deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
-data Let f = Let (Vector (f, f)) f
+data Let f = Let (Vector (Symbol, f)) f
            deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 
@@ -149,6 +142,13 @@ type SpecialFormF = Not :+: Or :+: And :+: Cond :+: Let :+: Apply :+: Begin :+:
 -- no Lists since all lists must go away during translation
 type SchemeExprF = Concat SpecialFormF (Vect :+: AtomF)
 type SchemeExpr = Term SchemeExprF
+
+-- Form without Cond.
+type CoreSpecialFormF = Not :+: Or :+: And :+: Let :+: Apply :+: Begin :+:
+                        If :+: Define :+: Assign :+: K Quote :+: Lambda
+type SchemeCoreExprF = Concat CoreSpecialFormF (Vect :+: AtomF)
+type SchemeCoreExpr = Term SchemeCoreExprF
+
 
 isNil :: (K Nil :<: f) => f ix -> Bool
 isNil t = case proj t of
@@ -212,15 +212,6 @@ type PrimitiveFunc =
   K PrimitiveEq :+: K PrimitiveLt :+: K PrimitiveLe :+:
   K PrimitiveGt :+: K PrimitiveGe :+:
   K PrimitiveCons :+: K PrimitiveCar :+: K PrimitiveCdr :+: K PrimitiveIsNil
-
--- instance Show (Primitive f) where
---   show (Primitive tag _) = "Primitive " ++ tag
-
--- instance Eq (Primitive f) where
---   Primitive tag _ == Primitive tag' _ = tag == tag'
---
--- instance Ord (Primitive f) where
---   compare (Primitive tag _) (Primitive tag' _) = compare tag tag'
 
 type SchemeValF e = Concat PrimitiveFunc (K (Closure e) :+: List :+: Vect :+: AtomF)
 type SchemeVal e = Term (SchemeValF e)
