@@ -18,6 +18,7 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedLists       #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE StandaloneDeriving    #-}
@@ -48,6 +49,9 @@ import Data.Text.Lazy (Text)
 import Data.Traversable (Traversable)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
+
+import Text.PrettyPrint.Leijen.Text (Pretty, Doc)
+import qualified Text.PrettyPrint.Leijen.Text as PP
 
 import ALaCarte
 import ALaCarte.TH
@@ -96,6 +100,42 @@ type SchemeSexpF = Vect :+: List :+: AtomF
 
 type SchemeSexp = Term SchemeSexpF
 
+--- prettyprinter for scheme sexps
+
+showSexp :: (Pretty a) => a -> Text
+showSexp = PP.displayT . PP.renderPretty 0.8 80 . PP.pretty
+
+class PrettyAlg f g where
+  prettyAlg :: f (Doc, Term g) -> Doc
+
+instance (PrettyAlg f h, PrettyAlg g h) => PrettyAlg (f :+: g) h where
+  prettyAlg (Inl f) = prettyAlg f
+  prettyAlg (Inr g) = prettyAlg g
+
+instance PrettyAlg (K AInt) g where
+  prettyAlg (K (AInt n)) = PP.integer n
+instance PrettyAlg (K ADouble) g where
+  prettyAlg (K (ADouble x)) = PP.double x
+instance PrettyAlg (K AString) g where
+  prettyAlg (K (AString s)) = PP.dquotes $ PP.text s
+instance PrettyAlg (K ABool) g where
+  prettyAlg (K (ABool b)) = PP.text $ if b == True then "#t" else "#f"
+instance PrettyAlg (K Nil) g where
+  prettyAlg (K Nil) = PP.text "nil"
+instance PrettyAlg (K Symbol) g where
+  prettyAlg (K (Symbol sym)) = PP.text sym
+instance (K Nil :<: g) => PrettyAlg List g where
+  prettyAlg (List (x, _) xs (t, tExpr)) =
+    case (xs, project tExpr) of
+      ([], Just (K Nil)) -> PP.parens x
+      (_, Just (K Nil))  -> PP.parens $ x PP.<+> PP.align (PP.sep $ V.toList $ V.map fst xs)
+      (_, Nothing)       -> PP.parens $ x PP.<+> PP.align (PP.sep $ V.toList (V.map fst xs) ++ [PP.dot, t])
+instance PrettyAlg Vect g where
+  prettyAlg (Vect xs) =
+    PP.text "#(" <> PP.cat (V.toList $ V.map fst xs) <> PP.text ")"
+instance Pretty SchemeSexp where
+  pretty = para prettyAlg
+
 --- Closer to evaluation, this is the abstract syntax
 
 -- syntactic lambda form
@@ -124,7 +164,9 @@ data Let f = Let (Vector (Symbol, f)) f
            deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 
-data Cond f = Cond (Vector (f, f))
+data Cond f = Cond
+                (Vector (f, f)) -- cases
+                (Maybe f) -- optional else clause
             deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 data And f = And f f

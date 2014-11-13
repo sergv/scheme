@@ -526,4 +526,18 @@ termTransHistoAnnM' alg = annLast . unTerm . cataAnn alg'
 (<.>) :: (Functor f, Functor g, Functor h) => TermHom g h -> TermHom f g -> TermHom f h
 (<.>) g f = termHom g . f
 
+--- Translate from one sum type into another.
+
+class Translate f g where
+  translateAlg :: f (Term g) -> Term g
+
+instance (f :<: h, Translate g h) => Translate (f :+: g) h where
+  translateAlg (Inl x) = translateAlg x
+  translateAlg (Inr y) = translateAlg y
+
+instance (f :<: g) => Translate f g where
+  translateAlg = inject
+
+retranslate :: (Translate f g, Functor f) => Term f -> Term g
+retranslate = cata translateAlg
 

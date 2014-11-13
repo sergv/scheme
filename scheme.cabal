@@ -13,7 +13,10 @@ build-type:          Simple
 library
   build-depends:     base, containers, mtl, text, wl-pprint-text, uu-parsinglib,
                      void, template-haskell, array, semigroups, vector
-  exposed-modules:   MCEval
+  exposed-modules:   Eval,
+                     Eval.EvalM,
+                     Eval.ExtractProgram,
+                     Eval.Desugar,
                      ALaCarte,
                      ALaCarte.TH,
                      Parse,
@@ -24,13 +27,13 @@ library
                      Utils
   -- other-modules:
   default-language:  Haskell2010
-  ghc-options:       -W -Wall -fwarn-monomorphism-restriction -ferror-spans -rtsopts
+  ghc-options:       -W -Wall -fwarn-monomorphism-restriction -fno-warn-name-shadowing -ferror-spans -rtsopts
   build-tools:       alex, happy
   hs-source-dirs:    src
 
 -- executable           scheme-repl
 --   build-depends:     scheme
---   main-is:           MCEval.hs
+--   main-is:           Eval.hs
 --   default-language:  Haskell2010
 --   ghc-options:       -W -Wall -fwarn-monomorphism-restriction -ferror-spans -rtsopts
 --   hs-source-dirs:    src

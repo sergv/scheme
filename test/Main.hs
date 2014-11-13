@@ -34,7 +34,9 @@ import Test.Tasty.HUnit
 -- import Text.ParserCombinators.UU.Utils
 
 import ALaCarte
-import MCEval
+import Eval
+import Eval.ExtractProgram
+import Eval.Desugar
 import Types
 -- import Parse
 import SexpFrontend.Parser
@@ -205,6 +207,34 @@ evalTests = testGroup "Eval tests"
   , testCase "lambda application" $
     isRight
       (testEvalTerm "((lambda (x y) x) 1 2)")
+      (Term (iAInt 1))
+  , testCase "if #1" $
+    isRight
+      (testEvalTerm "(if #t 1 2)")
+      (Term (iAInt 1))
+  , testCase "if #2" $
+    isRight
+      (testEvalTerm "(if #f 1 2)")
+      (Term (iAInt 2))
+  , testCase "lambda counter with state" $
+    isRight
+      (testEvalTerm "(let ((counter              \
+                    \        (let ((x 1))        \
+                    \          (lambda ()             \
+                    \            (set! x (+ x 1))\
+                    \            x))))           \
+                    \    (counter)               \
+                    \    (counter)               \
+                    \    (counter)               \
+                    \    (counter)) ")
+      (Term (iAInt 5))
+  , testCase "or short-circuit" $
+    isRight
+      (testEvalTerm "(begin (define foo 1) (or #t (set! foo 2)) foo)")
+      (Term (iAInt 1))
+  , testCase "and short-circuit" $
+    isRight
+      (testEvalTerm "(begin (define foo 1) (and #f (set! foo 2)) foo)")
       (Term (iAInt 1))
   , testCase "sum" $
     isRight
