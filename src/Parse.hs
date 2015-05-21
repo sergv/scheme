@@ -41,7 +41,7 @@ import Types
 -- many1 p = ((:) <$> p <*> many p)
 
 isWhitespace :: Char -> Bool
-isWhitespace = (`elem` " \r\n\t")
+isWhitespace = (`elem` (" \r\n\t" :: String))
 
 ws :: Parser ()
 ws = const () <$> pSatisfy isWhitespace ins
