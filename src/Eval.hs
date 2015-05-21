@@ -58,6 +58,7 @@ import ALaCarte
 import Eval.EvalM
 import Eval.ExtractProgram
 import Eval.Desugar
+import Eval.LispEqual
 import Types
 import Utils
 
@@ -74,12 +75,20 @@ eval :: Term (SchemeCoreExprF :&: U Position) -> Either Text (SchemeVal (SchemeC
 eval term = runEvalM (paraAnn evalProgramAlg term) initBindings
   where
     initBindings :: [(Symbol, SchemeVal (SchemeCoreExprF :&: U Position))]
-    initBindings = [ (Symbol "+", Term iPrimitiveAdd)
-                   , (Symbol "-", Term iPrimitiveSub)
-                   , (Symbol "*", Term iPrimitiveMul)
-                   , (Symbol "/", Term iPrimitiveDiv)
+    initBindings = [ (Symbol "+",     Term iPrimitiveAdd)
+                   , (Symbol "-",     Term iPrimitiveSub)
+                   , (Symbol "*",     Term iPrimitiveMul)
+                   , (Symbol "/",     Term iPrimitiveDiv)
+                   , (Symbol "eq?",   Term iPrimitiveEq)
+                   , (Symbol "cons",  Term iPrimitiveCons)
+                   , (Symbol "car",   Term iPrimitiveCar)
+                   , (Symbol "cdr",   Term iPrimitiveCdr)
+                   , (Symbol "null?", Term iPrimitiveIsNil)
                    ]
 
+-- f - source type
+-- g - type trick
+-- h - output types
 class EvalProgram f g h where
   evalProgramAlg :: Position
                  -> f (EvalM (Term h) (Term h), Term (g :&: U Position))
@@ -123,8 +132,8 @@ instance EvalProgram (K Symbol) g h where
     addr <- maybe err return =<< lookupInEnvM sym
     maybe err' return $ lookupMem addr mem
     where
-      err = throwError $ showPos pos <> "unbound variable: " <> getSymbol sym
-      err' = throwError $ showPos pos <> "bound variable absent in mem: " <> getSymbol sym
+      err = errorAt pos $ "unbound variable: " <> getSymbol sym
+      err' = errorAt pos $ "bound variable absent in mem: " <> getSymbol sym
 
 instance (Vect :<: h) => EvalProgram Vect g h where
   evalProgramAlg _ (Vect xs) =
@@ -159,7 +168,7 @@ instance (K Nil :<: h) => EvalProgram Define g h where
         modify (addNewObject sym val)
         return $ Term iNil
       Just _ -> do
-        throwError $ showPos pos <> " define cannot overwrite already set symbol " <> show' sym
+        errorAt pos $ "define cannot overwrite already set symbol " <> show' sym
 
 instance (K ABool :<: h, K Nil :<: h) => EvalProgram If g h where
   evalProgramAlg _ (If (cond, _) (true, _) (false, _)) = do
@@ -257,8 +266,8 @@ instance (Functor g, EvalProgram g g h) =>
               state
               (V.zip args values)
         | otherwise                  =
-          throwError msg
-      msg = showPos pos <> "wrong number of arguments supplied for lambda: " <>
+          errorAt pos msg
+      msg = "wrong number of arguments supplied for lambda: " <>
             "expected " <> show' argCount <> " but got " <> show' valCount
       argCount = V.length args
       valCount = V.length values
@@ -280,12 +289,12 @@ arith pos f defInt defDbl combine args = do
   where
     add :: (MonadError Text m) => (Integer, Double, Bool) -> Term h -> m (Integer, Double, Bool)
     add (ints, doubles, isInt) v
-      | Just (K (AInt n))    <- proj (unTerm v)
+      | Just (K (AInt n))    <- project v
       = return (f ints n, doubles,     isInt)
-      | Just (K (ADouble x)) <- proj (unTerm v)
+      | Just (K (ADouble x)) <- project v
       = return (ints,     f doubles x, False)
       | otherwise
-      = throwError $ showPos pos <> "cannot add non-number " <> show' v
+      = errorAt pos $ "cannot add non-number " <> show' v
 
 instance (K AInt :<: h, K ADouble :<: h, Show (Term h)) => Callable (K PrimitiveAdd) h where
   apply pos (K PrimitiveAdd) values = arith pos (+) 0 0 (+) values
@@ -293,26 +302,79 @@ instance (K AInt :<: h, K ADouble :<: h, Show (Term h)) => Callable (K Primitive
 instance (K AInt :<: h, K ADouble :<: h, Show (Term h)) => Callable (K PrimitiveSub) h where
   apply pos (K PrimitiveSub) values
     | V.null values =
-      throwError $ showPos pos <> "cannot apply subtraction to zero arguments"
+      errorAt pos "cannot apply subtraction to zero arguments"
     | otherwise     = do
       (defInt, defDbl) <- mkDefs
       arith pos (-) defInt defDbl (+) (V.tail values)
     where
-      v'@(Term v) = V.head values
+      v = V.head values
       mkDefs
-        | Just (K (AInt n))    <- proj v = return (n, 0)
-        | Just (K (ADouble x)) <- proj v = return (0, x)
-        | otherwise                      = throwError $
-          showPos pos <> "invalid argument type for subtraction: " <> show' v'
+        | Just (K (AInt n))    <- project v = return (n, 0)
+        | Just (K (ADouble x)) <- project v = return (0, x)
+        | otherwise                         =
+          errorAt pos $ "invalid argument type for subtraction: " <> show' v
 
 instance (K AInt :<: h, K ADouble :<: h, Show (Term h)) => Callable (K PrimitiveMul) h where
   apply pos (K PrimitiveMul) values = arith pos (*) 1 1 (*) values
 
+instance (K AInt :<: h, K ADouble :<: h, Show (Term h)) => Callable (K PrimitiveDiv) h where
+  apply pos (K PrimitiveDiv) [x, y] = do
+    z <- (/) <$> x' <*> y'
+    return $ Term $ iADouble z
+    where
+      x' | Just (K (AInt n))    <- project x = return $ fromIntegral n
+         | Just (K (ADouble d)) <- project x = return d
+         | otherwise                      =
+           errorAt pos $ "invalid first argument to division: " <> show' x
+      y' | Just (K (AInt n))    <- project y = return $ fromIntegral n
+         | Just (K (ADouble d)) <- project y = return $ d
+         | otherwise                      =
+           errorAt pos $ "invalid second argument to division: " <> show' y
+  apply pos (K PrimitiveDiv) args =
+    errorAt pos $ "cannot apply division to arguments " <> show' args
+
+instance (LispEqual h h, K ABool :<: h, Show (Term h)) => Callable (K PrimitiveEq) h where
+  apply _ (K PrimitiveEq) [Term x, Term y] =
+    return $ Term $ iABool $ lispEqual x y
+  apply pos (K PrimitiveEq) args =
+    errorAt pos $ "eq? requires two arguments, but got " <> show' args
+
+instance (List :<: h, Show (Term h)) => Callable (K PrimitiveCons) h where
+  apply _ (K PrimitiveCons) [x, y]
+    | Just (List h body t) <- project y = return $ Term $ iList x (V.cons h body) t
+    | otherwise                         = return $ Term $ iList x V.empty y
+  apply pos (K PrimitiveCons) args =
+    errorAt pos $ "cons requires two arguments, but got " <> show' args
+
+instance (List :<: h, Show (Term h)) => Callable (K PrimitiveCar) h where
+  apply pos (K PrimitiveCar) [x]
+    | Just (List h _body _t) <- project x = return h
+    | otherwise                           =
+    errorAt pos $ "invalid argument type to car, expected list but got " <> show' x
+  apply pos (K PrimitiveCar) args =
+    errorAt pos $ "car requires one argument, but got " <> show' args
+
+instance (List :<: h, Show (Term h)) => Callable (K PrimitiveCdr) h where
+  apply pos (K PrimitiveCdr) [x]
+    | Just (List _h body t) <- project x =
+      case body of
+        [] -> return t
+        _  -> return $ Term $ iList (V.head body) (V.tail body) t
+    | otherwise                          =
+    errorAt pos $ "invalid argument type to cdr, expected cons pair but got " <> show' x
+  apply pos (K PrimitiveCdr) args =
+    errorAt pos $ "cdr requires one argument, but got " <> show' args
+
+instance (K Nil :<: h, K ABool :<: h, Show (Term h)) => Callable (K PrimitiveIsNil) h where
+  apply _ (K PrimitiveIsNil) [Term x]
+    | Just (K Nil) <- proj x = return $ Term $ iABool True
+    | otherwise              = return $ Term $ iABool False
+  apply pos (K PrimitiveIsNil) args =
+    errorAt pos $ "cannot apply null? to arguments " <> show' args
+
 instance (Show (f (Term h)), Show (Term h)) => Callable f h where
   apply pos expr args =
-    throwError $ showPos pos <> "cannot apply " <> show' expr <>
-    " to args " <> show' args
-
+    errorAt pos $ "cannot apply " <> show' expr <> " to args " <> show' args
 
 
 evalPipeline :: Term (SchemeSexpF :&: U Position) -> Either Text (SchemeVal (SchemeCoreExprF :&: U Position))

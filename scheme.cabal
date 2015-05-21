@@ -17,6 +17,7 @@ library
                      Eval.EvalM,
                      Eval.ExtractProgram,
                      Eval.Desugar,
+                     Eval.LispEqual,
                      ALaCarte,
                      ALaCarte.TH,
                      Parse,
@@ -45,7 +46,7 @@ test-suite scheme-test
   type:             exitcode-stdio-1.0
   build-depends:    base, containers, mtl, text, wl-pprint-text, uu-parsinglib,
                     void, template-haskell, array, semigroups,
-                    tasty, tasty-hunit, template-haskell,
+                    tasty, tasty-hunit, template-haskell, vector,
                     --, hunit
                     -- test-framework,
                     -- QuickCheck, test-framework-quickcheck

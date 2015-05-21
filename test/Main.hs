@@ -25,6 +25,7 @@ import Control.Applicative
 import Data.Maybe (isJust)
 import Data.Text.Lazy (Text)
 import qualified Data.Text.Lazy as T
+import qualified Data.Vector as V
 import Test.Tasty
 -- import Test.Tasty.SmallCheck as SC
 -- import Test.Tasty.QuickCheck as QC
@@ -170,12 +171,22 @@ extractorTests = testGroup "Extractor tests"
         (iAnd
           (Term (iSymbol "foo"))
           (Term (iSymbol "bar"))))
-  , testCase "Extract and error" $
+  , testCase "Extract and error #1" $
     isLeft (testExtractTerm "(and foo bar baz)")
   , testCase "Extract and error #2" $
     isLeft (testExtractTerm "(and foo)")
   , testCase "Extract and error #3" $
     isLeft (testExtractTerm "(and)")
+  , testCase "Extract set!" $
+    isRight
+      (testExtractTerm "(set! foo bar)")
+      (Term (iAssign (Symbol "foo") (Term (iSymbol "bar"))))
+  , testCase "Extract set! error #1" $
+    isLeft (testExtractTerm "(set!)")
+  , testCase "Extract set! error #2" $
+    isLeft (testExtractTerm "(set! foo)")
+  , testCase "Extract set! error #3" $
+    isLeft (testExtractTerm "(set! foo bar baz)")
   ]
 
 testEvalTerm :: Text -> Either Text (SchemeVal (SchemeCoreExprF :&: U Position))
@@ -192,6 +203,14 @@ evalTests = testGroup "Eval tests"
     isRight
       (testEvalTerm "nil")
       (Term iNil)
+  , testCase "self-evaluating double" $
+    isRight
+      (testEvalTerm "1.5")
+      (Term (iADouble 1.5))
+  , testCase "self-evaluating string" $
+    isRight
+      (testEvalTerm "\"foo\"")
+      (Term (iAString "foo"))
   , testCase "assignment" $
     isRight
       (testEvalTerm "(begin (set! x 1) x)")
@@ -200,6 +219,14 @@ evalTests = testGroup "Eval tests"
     isRight
       (testEvalTerm "(begin (define x 1) x)")
       (Term (iAInt 1))
+  , testCase "define function" $
+    isRight
+      (testEvalTerm "(begin (define (f x) (+ x 1)) (f 10))")
+      (Term (iAInt 11))
+  , testCase "define recursive function" $
+    isRight
+      (testEvalTerm "(begin (define (f x) (if (eq? x 0) x (f (- x 1)))) (f 10))")
+      (Term (iAInt 0))
   , testCase "define and assignment" $
     isRight
       (testEvalTerm "(begin (define x 1) (set! x 2) x)")
@@ -208,6 +235,15 @@ evalTests = testGroup "Eval tests"
     isRight
       (testEvalTerm "((lambda (x y) x) 1 2)")
       (Term (iAInt 1))
+  , testCase "factorial" $
+    isRight
+      (testEvalTerm "(begin                           \
+                    \  (define (factorial n)          \
+                    \    (if (eq? n 0)                \
+                    \      1                          \
+                    \      (* n (factorial (- n 1)))))\
+                    \  (factorial 6))")
+      (Term (iAInt 720))
   , testCase "if #1" $
     isRight
       (testEvalTerm "(if #t 1 2)")
@@ -220,34 +256,126 @@ evalTests = testGroup "Eval tests"
     isRight
       (testEvalTerm "(let ((counter              \
                     \        (let ((x 1))        \
-                    \          (lambda ()             \
+                    \          (lambda ()        \
                     \            (set! x (+ x 1))\
                     \            x))))           \
                     \    (counter)               \
                     \    (counter)               \
                     \    (counter)               \
-                    \    (counter)) ")
+                    \    (counter))")
       (Term (iAInt 5))
-  , testCase "or short-circuit" $
+  , testCase "global environment is mutable" $
+    isRight
+      (testEvalTerm "(begin \
+                    \  (define (f) x)\
+                    \  (define x 0)\
+                    \  (f))")
+      (Term (iAInt 0))
+  , testCase "or" $
+    isRight
+      (testEvalTerm "(or #t #f)")
+      (Term (iABool True))
+  , testCase "and" $
+    isRight
+      (testEvalTerm "(and #t #f)")
+      (Term (iABool False))
+  , testCase "or short-circuit #1" $
     isRight
       (testEvalTerm "(begin (define foo 1) (or #t (set! foo 2)) foo)")
       (Term (iAInt 1))
-  , testCase "and short-circuit" $
+  , testCase "or short-circuit #2" $
+    isRight
+      (testEvalTerm "(begin (define foo 1) (or #f (set! foo 2)) foo)")
+      (Term (iAInt 2))
+  , testCase "and short-circuit #1" $
     isRight
       (testEvalTerm "(begin (define foo 1) (and #f (set! foo 2)) foo)")
       (Term (iAInt 1))
-  , testCase "sum" $
+  , testCase "and short-circuit #2" $
+    isRight
+      (testEvalTerm "(begin (define foo 1) (and #t (set! foo 2)) foo)")
+      (Term (iAInt 2))
+  , testCase "sum #1" $
     isRight
       (testEvalTerm "(+ 1 2 3 4)")
       (Term (iAInt 10))
-  , testCase "product" $
+  , testCase "sum #2" $
+    isRight
+      (testEvalTerm "(+)")
+      (Term (iAInt 0))
+  , testCase "product #1" $
     isRight
       (testEvalTerm "(* 1 2 3 4)")
       (Term (iAInt 24))
+  , testCase "product #2" $
+    isRight
+      (testEvalTerm "(*)")
+      (Term (iAInt 1))
   , testCase "difference" $
     isRight
       (testEvalTerm "(- 1 2 3 4)")
       (Term (iAInt (-8)))
+  , testCase "difference err #1" $
+    isLeft (testEvalTerm "(-)")
+  , testCase "division" $
+    isRight
+      (testEvalTerm "(/ 3 2)")
+      (Term (iADouble 1.5))
+  , testCase "division err #1" $
+    isLeft (testEvalTerm "(/ 3)")
+  , testCase "division err #2" $
+    isLeft (testEvalTerm "(/ 3 2 1)")
+  , testCase "division err #3" $
+    isLeft (testEvalTerm "(/)")
+  , testCase "null? #1" $
+    isRight
+      (testEvalTerm "(null? #t)")
+      (Term (iABool False))
+  , testCase "null? #2" $
+    isRight
+      (testEvalTerm "(null? nil)")
+      (Term (iABool True))
+  , testCase "cons #1" $
+    isRight
+      (testEvalTerm "(cons 1 2)")
+      (Term (iList (Term (iAInt 1)) V.empty (Term (iAInt 2))))
+  , testCase "cons #2" $
+    isRight
+      (testEvalTerm "(cons 1 (cons 2 3))")
+      (Term (iList (Term (iAInt 1)) (V.singleton (Term (iAInt 2))) (Term (iAInt 3))))
+  , testCase "cons #3" $
+    isRight
+      (testEvalTerm "(cons 1 (cons 2 (cons 3 nil)))")
+      (Term (iList
+               (Term (iAInt 1))
+               (V.fromList [Term (iAInt 2), Term (iAInt 3)])
+               (Term iNil)))
+  , testCase "cons err #1" $
+    isLeft (testEvalTerm "(cons 1 2 3)")
+  , testCase "cons err #2" $
+    isLeft (testEvalTerm "(cons 1)")
+  , testCase "cons err #3" $
+    isLeft (testEvalTerm "(cons)")
+  , testCase "car #1" $
+    isRight
+      (testEvalTerm "(car (cons 1 2))")
+      (Term (iAInt 1))
+  , testCase "car err #1" $
+    isLeft (testEvalTerm "(car 1)")
+  , testCase "car err #2" $
+    isLeft (testEvalTerm "(car (cons 1 2) 3)")
+  , testCase "car err #3" $
+    isLeft (testEvalTerm "(car)")
+  , testCase "cdr #1" $
+    isRight
+      (testEvalTerm "(cdr (cons 1 2))")
+      (Term (iAInt 2))
+  , testCase "cdr err #1" $
+    isLeft (testEvalTerm "(cdr 1)")
+  , testCase "cdr err #2" $
+    isLeft (testEvalTerm "(cdr (cons 1 2) 3)")
+  , testCase "cdr err #3" $
+    isLeft (testEvalTerm "(cdr)")
   ]
 
 main :: IO ()

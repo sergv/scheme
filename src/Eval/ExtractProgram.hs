@@ -94,7 +94,7 @@ instance forall h. (ToConstraint SpecialFormF h) => GetProgram List h where
                err argListPos "invalid argument list of lambda form" argList
         | otherwise ->
           errSexp "invalid lambda form"
-      Just (K (Symbol "quote"))  ->
+      Just (K (Symbol "quote")) ->
         case V.map (unTerm . stripA) xs of
           [x] -> return $ symToSym' $ iQuote $ Term x
           _   -> errSexp "invalid quote form"
@@ -102,6 +102,8 @@ instance forall h. (ToConstraint SpecialFormF h) => GetProgram List h where
         | [Term (var :&: _ :^: _), Term (_ :&: _ :^: val)] <- xs
         , Just (K sym@(Symbol _))                          <- proj var ->
         return $ symToSym' $ iAssign sym val
+        | otherwise ->
+          errSexp "invalid set! form"
       Just (K (Symbol "define"))
         | not (V.null xs)
         , Term (argList :&: _ :^: _) <- V.head xs
@@ -118,9 +120,9 @@ instance forall h. (ToConstraint SpecialFormF h) => GetProgram List h where
                errSexp "invalid define form"
         | otherwise ->
           errSexp "invalid define form"
-      Just (K (Symbol "if"))     ->
+      Just (K (Symbol "if"))    ->
         threeArgs iIf "invalid if form"
-      Just (K (Symbol "begin"))  ->
+      Just (K (Symbol "begin")) ->
         return $ mkBegin xs
       Just (K (Symbol "let"))
         | not (V.null xs)
@@ -152,7 +154,7 @@ instance forall h. (ToConstraint SpecialFormF h) => GetProgram List h where
        errSexp msg = err sexpPos msg $ inj sexp
        err :: Position -> Text -> SchemeSexpF (Term (SchemeSexpF :&: p)) -> Err a
        err pos msg sexp =
-         throwError $ showPos pos <> msg <> ": " <> showSexp (Term $ fmap stripA sexp)
+         errorAt pos $ msg <> ": " <> showSexp (Term $ fmap stripA sexp)
        mkBegin :: Vector (Term (a :&: U Position :*: Term (h :&: U Position))) -> Context h (Term (h :&: U Position))
        mkBegin = symToSym' . iBegin . V.map (annLast . unTerm)
        parseArgs :: Vector (Term (SchemeSexpF :&: U Position :*: a)) -> Err (Vector Symbol)
@@ -223,7 +225,7 @@ instance forall h. (ToConstraint SpecialFormF h) => GetProgram List h where
            _                       -> throwError $ errMsg <>
                                       ", symbol expected: " <> showSexp t
   getProgramAlg sexpPos x =
-    throwError $ showPos sexpPos <> "cannot exctract program from " <>
+    errorAt sexpPos $ "cannot exctract program from " <>
     showSexp (inject $ fmap stripA x :: SchemeSexp)
 
 instance (Vect :<: h) => GetProgram Vect h where

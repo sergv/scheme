@@ -65,9 +65,12 @@ import Prelude hiding (mapM)
 data Position = Position !Text !Int !Int
               deriving (Show, Eq, Ord)
 
-showPos :: Position -> Text
-showPos (Position file line col) =
-  file <> ":" <>  show' line <> ":" <> show' col <> ": "
+errorAt :: (MonadError Text m) => Position -> Text -> m a
+errorAt pos msg = throwError $ showPos pos <> msg
+  where
+    showPos :: Position -> Text
+    showPos (Position file line col) =
+      file <> ":" <>  show' line <> ":" <> show' col <> ": "
 
 newtype RawProgram = RawProgram (NonEmpty (Term (SchemeSexpF :&: U Position)))
                    deriving (Show, Eq, Ord)
